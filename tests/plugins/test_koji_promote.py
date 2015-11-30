@@ -10,6 +10,7 @@ from __future__ import unicode_literals
 
 import json
 import os
+import re
 
 try:
     import koji
@@ -44,7 +45,7 @@ import subprocess
 from osbs.api import OSBS
 from six import string_types
 
-NAMESPACE='mynamespace'
+NAMESPACE = 'mynamespace'
 BUILD_ID = 'build-1'
 
 
@@ -173,7 +174,13 @@ def mock_environment(tmpdir, session=None, name=None, version=None,
     setattr(workflow.source.lg, 'commit_id', '123456')
     setattr(workflow, 'build_logs', ['docker build log\n'])
     setattr(workflow, 'push_conf', PushConf())
-    workflow.push_conf.add_docker_registry('docker.example.com')
+    docker_reg = workflow.push_conf.add_docker_registry('docker.example.com')
+
+    for image in workflow.tag_conf.images:
+        tag = image.to_str(registry=False)
+        fake_digest = 'sha256:{0:032x}'.format(len(tag))
+        docker_reg.digests[tag] = fake_digest
+
     for pulp_registry in range(pulp_registries):
         workflow.push_conf.add_pulp_registry('env', 'pulp.example.com')
 
@@ -590,13 +597,36 @@ class TestKojiPromote(object):
             assert is_string_type(docker['id'])
             repositories = docker['repositories']
             assert isinstance(repositories, list)
-            for repository in repositories:
+            for repo in repositories:
+                assert isinstance(repo, dict)
+                assert set(repo.keys()) == set([
+                    'registry',
+                    'repository',
+                    'tag',
+                    'digest',
+                ])
+
+                registry = repo['registry']
+                repository = repo['repository']
+                tag = repo['tag']
+                digest = repo['digest']
+                assert is_string_type(registry)
+                assert '/' not in registry
+
                 assert is_string_type(repository)
-                image = ImageName.parse(repository)
-                assert image.registry
-                assert image.namespace
-                assert image.repo
-                assert image.tag and image.tag != 'latest'
+                assert len(repository.split('/')) <= 2
+
+                assert is_string_type(tag) and tag != 'latest'
+
+                assert digest is None or is_string_type(digest)
+                if digest:
+                    alg_comp = r'[A-Za-z][A-Za-z0-9]*'
+                    alg_sep = r'[+.-Z]'
+                    digest_re = (alg_comp +
+                                 '(' + alg_sep + alg_comp + ')?' +
+                                 ':' +
+                                 r'[0-9a-fA-F]{32,}')
+                    assert re.match(digest_re, digest)
 
     @pytest.mark.parametrize(('apis', 'pulp_registries', 'metadata_only'), [
         ('v1-only',

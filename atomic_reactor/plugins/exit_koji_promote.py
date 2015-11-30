@@ -355,7 +355,29 @@ class KojiPromotePlugin(ExitPlugin):
 
         return metadata, output
 
-    def get_output_images(self):
+    def get_digests(self):
+        """
+        Returns a map of (repository, tag) to digest
+        """
+
+        digests = {}  # (repository, tag) -> digest
+        for registry in self.workflow.push_conf.docker_registries:
+            for image in self.workflow.tag_conf.images:
+                image_str = image.to_str()
+                if image_str in registry.digests:
+                    digest = registry.digests[image_str]
+                    digests[(image.to_str(registry=False, tag=False),
+                             image.tag or 'latest')] = digest
+
+        return digests
+
+    def get_repositories(self, digests):
+        """
+        Build the repositories metadata
+
+        :param digests: dict, (repository, tag) -> digest
+        """
+
         if self.workflow.push_conf.pulp_registries:
             # If pulp was used, only report pulp images
             registries = self.workflow.push_conf.pulp_registries
@@ -363,7 +385,8 @@ class KojiPromotePlugin(ExitPlugin):
             # Otherwise report all the images we pushed
             registries = self.workflow.push_conf.all_registries
 
-        output_images = []
+        repositories = []
+        output_images = []  # for avoiding duplicates
         for registry in registries:
             for image in (self.workflow.tag_conf.primary_images +
                           self.workflow.tag_conf.unique_images):
@@ -372,7 +395,18 @@ class KojiPromotePlugin(ExitPlugin):
                 if registry_image not in output_images:
                     output_images.append(registry_image)
 
-        return output_images
+                repository = registry_image.to_str(registry=False,
+                                                   tag=False)
+                tag = registry_image.tag or 'latest'
+                if tag != 'latest':
+                    repositories.append({
+                        'registry': registry_image.registry,
+                        'repository': repository,
+                        'tag': tag,
+                        'digest': digests[(repository, tag)],
+                    })
+
+        return repositories
 
     def get_output(self, buildroot_id):
         """
@@ -397,9 +431,8 @@ class KojiPromotePlugin(ExitPlugin):
         # Parent of squashed built image is base image
         image_id = self.workflow.builder.image_id
         parent_id = self.workflow.base_image_inspect['Id']
-        output_images = self.get_output_images()
-        repositories = [image.to_str() for image in output_images
-                        if image.tag != 'latest']
+        digests = self.get_digests()
+        repositories = self.get_repositories(digests)
         arch = os.uname()[4]
         metadata, output = self.get_image_output()
         metadata.update({
