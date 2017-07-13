@@ -13,9 +13,11 @@ import os
 import sys
 
 import pytest
+import flexmock
 
 from atomic_reactor.buildimage import BuildImageBuilder
 from atomic_reactor.core import DockerTasker
+from atomic_reactor.plugin import InputPluginsRunner
 import atomic_reactor.cli.main
 
 from tests.fixtures import is_registry_running, temp_image_name, get_uuid  # noqa
@@ -173,3 +175,22 @@ class TestCLISuite(object):
             self.exec_cli(command)
         assert excinfo.value.code == 0
         dt.remove_image(temp_image, noprune=True)
+
+    def test_log_encoding(self, caplog):
+        if MOCK:
+            mock_docker()
+
+        (flexmock(InputPluginsRunner)
+            .should_receive('run')
+            .and_raise(RuntimeError))
+
+        command = [
+            "main.py",
+            "--verbose",
+            "inside-build",
+        ]
+        with caplog.atLevel(logging.INFO):
+            with pytest.raises(RuntimeError) as excinfo:
+                self.exec_cli(command)
+
+        assert caplog.records()[0].message == 'log encoding: UTF8'
